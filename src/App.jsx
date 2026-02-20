@@ -56,7 +56,15 @@ export default function App() {
 
     loadContacts();
     loadRecents();
-    initDevice();
+
+    // Defer Device init until first user gesture to satisfy AudioContext policy
+    const onFirstGesture = () => {
+      initDevice();
+      window.removeEventListener('pointerdown', onFirstGesture);
+      window.removeEventListener('keydown', onFirstGesture);
+    };
+    window.addEventListener('pointerdown', onFirstGesture);
+    window.addEventListener('keydown', onFirstGesture);
 
     return () => {
       if (deviceRef.current) {
@@ -91,7 +99,7 @@ export default function App() {
       const token = await fetchToken();
 
       const device = new Device(token, {
-        edge: ['dublin', 'ashburn'],
+        edge: 'dublin',
         closeProtection: true,
         enableImprovedSignalingErrorPrecision: true,
       });
