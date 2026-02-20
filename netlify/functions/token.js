@@ -49,7 +49,7 @@ exports.handler = async (event) => {
       process.env.TWILIO_ACCOUNT_SID,
       process.env.TWILIO_API_KEY_SID,
       process.env.TWILIO_API_KEY_SECRET,
-      { identity: 'arcticalls-agent', ttl: 3600 }
+      { identity: 'arcticalls-agent', ttl: 3600, region: 'ie1' }
     );
 
     token.addGrant(
