@@ -9,13 +9,10 @@ const rateLimit = new Map();
 exports.handler = async (event) => {
   // CORS — allow only known origins
   const origin = event.headers.origin || event.headers.referer || '';
-  const allowedOrigins = [
-    process.env.SITE_URL,
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'http://localhost:8888',
-  ];
-  const originAllowed = allowedOrigins.some((o) => o && origin.startsWith(o));
+  const siteUrl = process.env.SITE_URL || process.env.URL || '';
+  const originAllowed =
+    (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) ||
+    (siteUrl && origin.startsWith(siteUrl));
   if (!originAllowed) {
     return { statusCode: 403, body: 'Forbidden' };
   }
@@ -52,7 +49,7 @@ exports.handler = async (event) => {
       process.env.TWILIO_ACCOUNT_SID,
       process.env.TWILIO_API_KEY_SID,
       process.env.TWILIO_API_KEY_SECRET,
-      { identity: 'arcticalls-agent', ttl: 3600 }
+      { identity: 'arcticalls-agent', ttl: 3600, region: 'ie1' }
     );
 
     token.addGrant(

@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useRef, useEffect } from 'react';
 
 const KEYS = [
   { digit: '1', sub: '' },
@@ -25,6 +25,24 @@ export default function KeypadView({
 }) {
   const longPressTimer  = useRef(null);
   const longPressFired  = useRef(false);
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.key >= '0' && e.key <= '9') {
+        setDialedNumber((prev) => prev + e.key);
+      } else if (e.key === '+' || e.key === '*' || e.key === '#') {
+        setDialedNumber((prev) => prev + e.key);
+      } else if (e.key === 'Backspace') {
+        setDialedNumber((prev) => prev.slice(0, -1));
+      } else if (e.key === 'Enter') {
+        if (dialedNumber && deviceStatus === 'ready' && callStatus === 'idle') {
+          onCall(dialedNumber);
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [dialedNumber, deviceStatus, callStatus, onCall, setDialedNumber]);
 
   const handleKey = (digit) => {
     setDialedNumber((prev) => prev + digit);
