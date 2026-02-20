@@ -72,6 +72,8 @@ body {
     height: 100dvh;
     border-radius: 0;
     box-shadow: none;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 }
 

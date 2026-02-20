@@ -208,7 +208,8 @@ export default function App() {
       const contact = contacts.find(
         (c) => normalizePhone(c.phone) === number
       );
-      await supabase.from('ArctiCalls_recents').insert({
+      const { error: insertError } = await supabase.from('ArctiCalls_recents').insert({
+        user_id:          user.id,
         phone:            number,
         display_name:     contact?.name || null,
         contact_id:       contact?.id   || null,
@@ -218,6 +219,7 @@ export default function App() {
         ended_at:         new Date().toISOString(),
         status,
       });
+      if (insertError) console.error('Failed to log call:', insertError);
       loadRecents();
     }
   };

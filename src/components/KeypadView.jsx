@@ -144,8 +144,11 @@ export default function KeypadView({
       </div>
 
       {/* Keypad grid */}
-      <div className="flex-1 px-4 pb-2 flex flex-col justify-between">
-        <div className="grid grid-cols-3 gap-3">
+      <div className="flex-1 px-4 pb-2 flex flex-col overflow-hidden">
+        <div
+          className="flex-1 grid grid-cols-3 gap-2"
+          style={{ gridTemplateRows: 'repeat(4, 1fr)' }}
+        >
           {KEYS.map(({ digit, sub }) => {
             const isZero = digit === '0';
             return (
@@ -156,7 +159,7 @@ export default function KeypadView({
                 onPointerLeave={isZero ? () => clearTimeout(longPressTimer.current) : undefined}
                 onClick={!isZero ? () => handleKey(digit) : undefined}
                 className="flex flex-col items-center justify-center rounded-2xl transition-transform active:scale-95 select-none"
-                style={{ backgroundColor: '#E8E8ED', aspectRatio: '1 / 1' }}
+                style={{ backgroundColor: '#E8E8ED' }}
               >
                 <span className="text-2xl font-light" style={{ color: 'var(--ios-label)', lineHeight: 1.1 }}>
                   {digit}
@@ -175,7 +178,7 @@ export default function KeypadView({
         </div>
 
         {/* Call button row */}
-        <div className="flex items-center justify-center py-4">
+        <div className="flex items-center justify-center py-3">
           <button
             onClick={handleCall}
             disabled={!canCall}
