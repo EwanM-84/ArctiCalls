@@ -26,6 +26,7 @@ export default function App() {
   const [currentNumber, setCurrentNumber] = useState('');
   const [callDuration, setCallDuration]   = useState(0);
   const [isMuted, setIsMuted]             = useState(false);
+  const [incomingCall, setIncomingCall]   = useState(null); // incoming Call object
   const callRef      = useRef(null);
   const timerRef     = useRef(null);
   const callStartRef = useRef(null);
@@ -118,6 +119,12 @@ export default function App() {
         } catch (err) {
           console.error('Token refresh failed:', err);
         }
+      });
+
+      device.on('incoming', (call) => {
+        setIncomingCall(call);
+        call.on('cancel', () => setIncomingCall(null));
+        call.on('disconnect', () => setIncomingCall(null));
       });
 
       await device.register();
@@ -224,6 +231,30 @@ export default function App() {
     }
   };
 
+  // ── Incoming call controls ────────────────────────────────────────────────
+  const acceptCall = () => {
+    if (!incomingCall) return;
+    const call = incomingCall;
+    setIncomingCall(null);
+    callRef.current = call;
+    const from = call.parameters?.From || '';
+    setCurrentNumber(from);
+    setCallStatus('active');
+    callStartRef.current = Date.now();
+    timerRef.current = setInterval(() => {
+      setCallDuration(Math.floor((Date.now() - callStartRef.current) / 1000));
+    }, 1000);
+    call.on('disconnect', () => handleCallEnd('completed'));
+    call.on('error', () => handleCallEnd('failed'));
+    call.accept();
+  };
+
+  const rejectCall = () => {
+    if (!incomingCall) return;
+    incomingCall.reject();
+    setIncomingCall(null);
+  };
+
   // ── Call controls ─────────────────────────────────────────────────────────
   const hangUp = () => {
     if (callRef.current) callRef.current.disconnect();
@@ -284,6 +315,47 @@ export default function App() {
       </div>
 
       <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} />
+
+      {/* Incoming call banner */}
+      {incomingCall && (
+        <div
+          className="absolute inset-x-0 top-0 z-50 flex flex-col items-center justify-between px-6 py-8"
+          style={{ background: 'rgba(0,0,0,0.92)', minHeight: '100%' }}
+        >
+          <div className="flex flex-col items-center mt-12 gap-3">
+            <div
+              className="w-20 h-20 rounded-full flex items-center justify-center text-3xl font-bold"
+              style={{ background: 'var(--ios-label3)', color: '#fff' }}
+            >
+              {(incomingCall.parameters?.From || '?')[0]}
+            </div>
+            <p className="text-white text-2xl font-semibold mt-2">
+              {incomingCall.parameters?.From || 'Unknown'}
+            </p>
+            <p className="text-sm" style={{ color: 'var(--ios-label3)' }}>Incoming call</p>
+          </div>
+          <div className="flex gap-16 mb-8">
+            <button
+              onClick={rejectCall}
+              className="w-16 h-16 rounded-full flex items-center justify-center"
+              style={{ backgroundColor: '#FF3B30' }}
+            >
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="white" style={{ transform: 'rotate(135deg)' }}>
+                <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.25.2 2.45.6 3.6.1.3 0 .7-.2 1L6.6 10.8z" />
+              </svg>
+            </button>
+            <button
+              onClick={acceptCall}
+              className="w-16 h-16 rounded-full flex items-center justify-center"
+              style={{ backgroundColor: '#34C759' }}
+            >
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="white">
+                <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.25.2 2.45.6 3.6.1.3 0 .7-.2 1L6.6 10.8z" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Active call overlay */}
       {callStatus !== 'idle' && (

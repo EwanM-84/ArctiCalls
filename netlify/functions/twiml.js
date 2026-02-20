@@ -11,19 +11,38 @@ function normalizeUK(phone) {
 }
 
 exports.handler = async (event) => {
-  const callerId = process.env.TWILIO_PHONE_NUMBER;
+  const twilioNumber = process.env.TWILIO_PHONE_NUMBER;
 
   // Twilio sends params in the POST body (URL-encoded) or query string
   let to = '';
+  let from = '';
   if (event.httpMethod === 'POST' && event.body) {
     const params = new URLSearchParams(event.body);
-    to = params.get('To') || '';
+    to   = params.get('To')   || '';
+    from = params.get('From') || '';
   } else {
-    to = event.queryStringParameters?.To || '';
+    to   = event.queryStringParameters?.To   || '';
+    from = event.queryStringParameters?.From || '';
   }
 
   const normalizedTo = normalizeUK(to);
 
+  // ── Inbound call: someone calling our Twilio number ───────────────────────
+  // Route to the browser client (arcticalls-agent)
+  if (normalizedTo === normalizeUK(twilioNumber)) {
+    return {
+      statusCode: 200,
+      headers: { 'Content-Type': 'text/xml' },
+      body: `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Dial timeout="30" callerId="${twilioNumber}">
+    <Client>arcticalls-agent</Client>
+  </Dial>
+</Response>`,
+    };
+  }
+
+  // ── Outbound call: browser client dialling an external number ────────────
   // Safety check — must be a plausible E.164 number
   if (!normalizedTo.match(/^\+\d{10,15}$/)) {
     return {
@@ -35,7 +54,7 @@ exports.handler = async (event) => {
 
   const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Dial callerId="${callerId}" timeout="30">
+  <Dial callerId="${twilioNumber}" timeout="30">
     <Number>${normalizedTo}</Number>
   </Dial>
 </Response>`;

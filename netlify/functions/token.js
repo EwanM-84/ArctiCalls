@@ -55,7 +55,7 @@ exports.handler = async (event) => {
     token.addGrant(
       new VoiceGrant({
         outgoingApplicationSid: process.env.TWILIO_TWIML_APP_SID,
-        incomingAllow: false, // v1: outbound only
+        incomingAllow: true,
       })
     );
 
