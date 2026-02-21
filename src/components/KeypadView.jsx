@@ -40,8 +40,19 @@ export default function KeypadView({
         }
       }
     };
+
+    const onPaste = (e) => {
+      const text = (e.clipboardData || window.clipboardData).getData('text');
+      const digits = text.replace(/[^0-9+*#]/g, '');
+      if (digits) setDialedNumber((prev) => prev + digits);
+    };
+
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('paste', onPaste);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('paste', onPaste);
+    };
   }, [dialedNumber, deviceStatus, callStatus, onCall, setDialedNumber]);
 
   const handleKey = (digit) => {

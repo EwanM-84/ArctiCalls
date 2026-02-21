@@ -27,9 +27,10 @@ export default function App() {
   const [callDuration, setCallDuration]   = useState(0);
   const [isMuted, setIsMuted]             = useState(false);
   const [incomingCall, setIncomingCall]   = useState(null); // incoming Call object
-  const callRef      = useRef(null);
-  const timerRef     = useRef(null);
-  const callStartRef = useRef(null);
+  const callRef         = useRef(null);
+  const timerRef        = useRef(null);
+  const callStartRef    = useRef(null);
+  const currentNumberRef = useRef(''); // ref copy avoids stale closure in call event handlers
 
   // ── UI ────────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState('keypad');
@@ -58,14 +59,9 @@ export default function App() {
     loadContacts();
     loadRecents();
 
-    // Defer Device init until first user gesture to satisfy AudioContext policy
-    const onFirstGesture = () => {
-      initDevice();
-      window.removeEventListener('pointerdown', onFirstGesture);
-      window.removeEventListener('keydown', onFirstGesture);
-    };
-    window.addEventListener('pointerdown', onFirstGesture);
-    window.addEventListener('keydown', onFirstGesture);
+    // Init immediately — login tap satisfies AudioContext gesture requirement.
+    // Deferring to first gesture prevents inbound calls from ringing.
+    initDevice();
 
     return () => {
       if (deviceRef.current) {
@@ -161,6 +157,7 @@ export default function App() {
     if (!normalized) return;
 
     setCurrentNumber(normalized);
+    currentNumberRef.current = normalized;
     setCallStatus('calling');
     setCallDuration(0);
     setIsMuted(false);
@@ -202,13 +199,14 @@ export default function App() {
     const duration = callStartRef.current
       ? Math.floor((Date.now() - callStartRef.current) / 1000)
       : 0;
-    const number = currentNumber;
+    const number = currentNumberRef.current;
+    currentNumberRef.current = '';
 
     setCallStatus('idle');
     setCurrentNumber('');
     setCallDuration(0);
     setIsMuted(false);
-    callRef.current    = null;
+    callRef.current      = null;
     callStartRef.current = null;
 
     if (number && user) {
@@ -239,6 +237,7 @@ export default function App() {
     callRef.current = call;
     const from = call.parameters?.From || '';
     setCurrentNumber(from);
+    currentNumberRef.current = from;
     setCallStatus('active');
     callStartRef.current = Date.now();
     timerRef.current = setInterval(() => {
