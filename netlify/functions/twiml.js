@@ -28,15 +28,24 @@ exports.handler = async (event) => {
   const normalizedTo = normalizeUK(to);
 
   // ── Inbound call: someone calling our Twilio number ───────────────────────
-  // Route to the browser client (arcticalls-agent)
+  // Ring the browser client. If TWILIO_FORWARD_NUMBER is set, ring that
+  // real mobile at the same time — first to answer wins. This means calls
+  // still reach a real phone even when the browser app is closed.
   if (normalizedTo === normalizeUK(twilioNumber)) {
+    const forward = process.env.TWILIO_FORWARD_NUMBER
+      ? normalizeUK(process.env.TWILIO_FORWARD_NUMBER)
+      : null;
+
+    const dialBody = forward
+      ? `\n    <Client>arcticalls-agent</Client>\n    <Number>${forward}</Number>`
+      : `\n    <Client>arcticalls-agent</Client>`;
+
     return {
       statusCode: 200,
       headers: { 'Content-Type': 'text/xml' },
       body: `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Dial timeout="30" callerId="${twilioNumber}">
-    <Client>arcticalls-agent</Client>
+  <Dial timeout="30" callerId="${twilioNumber}">${dialBody}
   </Dial>
 </Response>`,
     };

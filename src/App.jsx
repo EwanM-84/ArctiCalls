@@ -364,6 +364,7 @@ export default function App() {
           callDuration={callDuration}
           isMuted={isMuted}
           contacts={contacts}
+          device={deviceRef.current}
           onHangUp={hangUp}
           onToggleMute={toggleMute}
           onSendDtmf={sendDtmf}

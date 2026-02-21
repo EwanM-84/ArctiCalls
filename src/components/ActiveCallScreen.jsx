@@ -9,6 +9,7 @@ export default function ActiveCallScreen({
   callDuration,
   isMuted,
   contacts,
+  device,
   onHangUp,
   onToggleMute,
   onSendDtmf,
@@ -16,8 +17,11 @@ export default function ActiveCallScreen({
   const [showKeypad, setShowKeypad] = useState(false);
   const [speakerActive, setSpeakerActive] = useState(false);
 
+  // Speaker is supported on desktop Chrome via selectAudioOutput or setSinkId.
+  // iOS Safari cannot route web audio to the speaker — the OS controls this.
   const speakerSupported =
-    typeof navigator?.mediaDevices?.selectAudioOutput === 'function';
+    typeof navigator?.mediaDevices?.selectAudioOutput === 'function' ||
+    (device?.audio?.availableOutputDevices?.size > 1);
 
   // Try to match the number to a contact
   const contact = contacts?.find((c) => {
@@ -35,12 +39,28 @@ export default function ActiveCallScreen({
   }[callStatus] ?? '';
 
   const handleSpeaker = async () => {
-    if (!speakerSupported) return;
+    const next = !speakerActive;
     try {
-      await navigator.mediaDevices.selectAudioOutput({});
-      setSpeakerActive((v) => !v);
+      // Twilio SDK audio device API (works on desktop Chrome)
+      if (device?.audio) {
+        const outputs = [...(device.audio.availableOutputDevices?.values() ?? [])];
+        if (next) {
+          // Pick the first non-default device (external speaker), or 'default'
+          const speaker = outputs.find((d) => d.deviceId !== 'default') || outputs[0];
+          if (speaker) await device.audio.speakerDevices.set(speaker.deviceId);
+        } else {
+          await device.audio.speakerDevices.set('default');
+        }
+        setSpeakerActive(next);
+        return;
+      }
+      // Fallback: browser selectAudioOutput dialog (desktop Chrome)
+      if (typeof navigator?.mediaDevices?.selectAudioOutput === 'function') {
+        await navigator.mediaDevices.selectAudioOutput({});
+        setSpeakerActive(next);
+      }
     } catch {
-      // User cancelled
+      // User cancelled or not supported — ignore
     }
   };
 
@@ -160,7 +180,7 @@ export default function ActiveCallScreen({
             active={speakerActive}
             disabled={!speakerSupported}
             onClick={handleSpeaker}
-            title={speakerSupported ? 'Speaker output' : 'Not supported in this browser'}
+            title={speakerSupported ? 'Toggle speaker' : 'Speaker switching not available on iOS Safari'}
             icon={
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
                 <path d="M11 5L6 9H2v6h4l5 4V5z" fill="currentColor" />

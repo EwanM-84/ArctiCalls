@@ -28,6 +28,8 @@ export default function KeypadView({
 
   useEffect(() => {
     const onKeyDown = (e) => {
+      // Let the <input> handle its own events; only intercept when input is not focused
+      if (e.target.tagName === 'INPUT') return;
       if (e.key >= '0' && e.key <= '9') {
         setDialedNumber((prev) => prev + e.key);
       } else if (e.key === '+' || e.key === '*' || e.key === '#') {
@@ -41,18 +43,8 @@ export default function KeypadView({
       }
     };
 
-    const onPaste = (e) => {
-      const text = (e.clipboardData || window.clipboardData).getData('text');
-      const digits = text.replace(/[^0-9+*#]/g, '');
-      if (digits) setDialedNumber((prev) => prev + digits);
-    };
-
     window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('paste', onPaste);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('paste', onPaste);
-    };
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, [dialedNumber, deviceStatus, callStatus, onCall, setDialedNumber]);
 
   const handleKey = (digit) => {
@@ -120,15 +112,30 @@ export default function KeypadView({
         </div>
       </div>
 
-      {/* Number display */}
+      {/* Number display — using <input> so native long-press paste works on mobile */}
       <div className="flex items-center justify-between px-5 py-4" style={{ minHeight: 72, flexShrink: 0 }}>
         <div className="flex-1 text-center">
-          <span
-            className="text-4xl font-thin tracking-wider"
+          <input
+            type="tel"
+            inputMode="none"
+            value={dialedNumber}
+            onChange={(e) => setDialedNumber(e.target.value.replace(/[^0-9+*#]/g, ''))}
+            onPaste={(e) => {
+              e.preventDefault();
+              const text = (e.clipboardData || window.clipboardData).getData('text');
+              const digits = text.replace(/[^0-9+*#]/g, '');
+              if (digits) setDialedNumber((prev) => prev + digits);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && dialedNumber && deviceStatus === 'ready' && callStatus === 'idle') {
+                onCall(dialedNumber);
+              }
+            }}
+            className="text-4xl font-thin tracking-wider text-center w-full bg-transparent outline-none border-none"
             style={{ color: 'var(--ios-label)' }}
-          >
-            {dialedNumber}
-          </span>
+            autoComplete="off"
+            spellCheck={false}
+          />
         </div>
         {dialedNumber && (
           <button
