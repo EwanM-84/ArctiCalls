@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">ArctiCalls</string>
+    <string name="title_activity_main">ArctiCalls</string>
+    <string name="package_name">com.arcticalls.app</string>
+    <string name="custom_url_scheme">com.arcticalls.app</string>
+</resources>

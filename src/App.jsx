@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { Device } from '@twilio/voice-sdk';
+import { Capacitor } from '@capacitor/core';
+import { PushNotifications } from '@capacitor/push-notifications';
 import { supabase } from './lib/supabase';
+import { API_BASE } from './lib/api';
 import { normalizePhone } from './lib/utils';
 import AuthGate from './components/AuthGate';
 import StatusBar from './components/StatusBar';
@@ -27,10 +30,11 @@ export default function App() {
   const [callDuration, setCallDuration]   = useState(0);
   const [isMuted, setIsMuted]             = useState(false);
   const [incomingCall, setIncomingCall]   = useState(null); // incoming Call object
-  const callRef         = useRef(null);
-  const timerRef        = useRef(null);
-  const callStartRef    = useRef(null);
+  const callRef          = useRef(null);
+  const timerRef         = useRef(null);
+  const callStartRef     = useRef(null);
   const currentNumberRef = useRef(''); // ref copy avoids stale closure in call event handlers
+  const pendingCallSidRef = useRef(null); // set when app is opened via push notification
 
   // ── UI ────────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState('keypad');
@@ -58,6 +62,7 @@ export default function App() {
 
     loadContacts();
     loadRecents();
+    registerPush();
 
     // Init immediately — login tap satisfies AudioContext gesture requirement.
     // Deferring to first gesture prevents inbound calls from ringing.
@@ -76,7 +81,7 @@ export default function App() {
   const fetchToken = async (retries = 3) => {
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
-        const res = await fetch('/.netlify/functions/token', {
+        const res = await fetch(`${API_BASE}/.netlify/functions/token`, {
           credentials: 'same-origin',
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -101,7 +106,23 @@ export default function App() {
         enableImprovedSignalingErrorPrecision: true,
       });
 
-      device.on('registered', () => setDeviceStatus('ready'));
+      device.on('registered', async () => {
+        setDeviceStatus('ready');
+        // If app was opened by a push notification for a held call, accept it now
+        if (pendingCallSidRef.current) {
+          const sid = pendingCallSidRef.current;
+          pendingCallSidRef.current = null;
+          try {
+            await fetch(`${API_BASE}/.netlify/functions/accept-inbound`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ callSid: sid }),
+            });
+          } catch (err) {
+            console.error('accept-inbound failed:', err);
+          }
+        }
+      });
 
       device.on('error', (err) => {
         console.error('Twilio Device error:', err);
@@ -128,6 +149,37 @@ export default function App() {
     } catch (err) {
       console.error('Device init failed:', err);
       setDeviceStatus('error');
+    }
+  };
+
+  // ── Push notification registration (Android only) ────────────────────────
+  const registerPush = async () => {
+    if (!Capacitor.isNativePlatform()) return;
+    try {
+      const { receive } = await PushNotifications.requestPermissions();
+      if (receive !== 'granted') return;
+      await PushNotifications.register();
+
+      PushNotifications.addListener('registration', async ({ value: token }) => {
+        await supabase.from('push_tokens').upsert(
+          { user_id: user.id, token, platform: 'android' },
+          { onConflict: 'user_id,token' }
+        );
+      });
+
+      // Foreground push: show in-app banner (Twilio Device will also fire 'incoming')
+      PushNotifications.addListener('pushNotificationReceived', (notification) => {
+        const { pending_call_sid } = notification.data || {};
+        if (pending_call_sid) pendingCallSidRef.current = pending_call_sid;
+      });
+
+      // User tapped the notification while app was backgrounded/killed
+      PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+        const { pending_call_sid } = action.notification.data || {};
+        if (pending_call_sid) pendingCallSidRef.current = pending_call_sid;
+      });
+    } catch (err) {
+      console.error('Push registration failed:', err);
     }
   };
 

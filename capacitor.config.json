@@ -1,0 +1,11 @@
+{
+  "appId": "com.arcticalls.app",
+  "appName": "ArctiCalls",
+  "webDir": "dist",
+  "plugins": {
+    "PushNotifications": {
+      "presentationOptions": ["badge", "sound", "alert"],
+      "importance": 5
+    }
+  }
+}

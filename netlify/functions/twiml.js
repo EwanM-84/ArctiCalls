@@ -12,26 +12,37 @@ function normalizeUK(phone) {
 
 exports.handler = async (event) => {
   const twilioNumber = process.env.TWILIO_PHONE_NUMBER;
+  const siteUrl = process.env.SITE_URL || process.env.URL || '';
 
   // Twilio sends params in the POST body (URL-encoded) or query string
   let to = '';
   let from = '';
+  let callSid = '';
   if (event.httpMethod === 'POST' && event.body) {
     const params = new URLSearchParams(event.body);
-    to   = params.get('To')   || '';
-    from = params.get('From') || '';
+    to      = params.get('To')      || '';
+    from    = params.get('From')    || '';
+    callSid = params.get('CallSid') || '';
   } else {
-    to   = event.queryStringParameters?.To   || '';
-    from = event.queryStringParameters?.From || '';
+    to      = event.queryStringParameters?.To      || '';
+    from    = event.queryStringParameters?.From    || '';
+    callSid = event.queryStringParameters?.CallSid || '';
   }
 
   const normalizedTo = normalizeUK(to);
 
   // ── Inbound call: someone calling our Twilio number ───────────────────────
-  // Ring the browser client. If TWILIO_FORWARD_NUMBER is set, ring that
-  // real mobile at the same time — first to answer wins. This means calls
-  // still reach a real phone even when the browser app is closed.
+  // 1. Send FCM push to wake the Android app (fire-and-forget)
+  // 2. Try to ring the browser client for 35s; if it doesn't answer,
+  //    dial-fallback holds the caller on silence while the app boots.
   if (normalizedTo === normalizeUK(twilioNumber)) {
+    // Fire-and-forget push — don't wait for it to complete
+    fetch(`${siteUrl}/.netlify/functions/send-push`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ callSid, from }),
+    }).catch(() => {});
+
     const forward = process.env.TWILIO_FORWARD_NUMBER
       ? normalizeUK(process.env.TWILIO_FORWARD_NUMBER)
       : null;
@@ -45,7 +56,7 @@ exports.handler = async (event) => {
       headers: { 'Content-Type': 'text/xml' },
       body: `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Dial timeout="30" callerId="${twilioNumber}">${dialBody}
+  <Dial timeout="35" action="${siteUrl}/.netlify/functions/dial-fallback" callerId="${twilioNumber}">${dialBody}
   </Dial>
 </Response>`,
     };

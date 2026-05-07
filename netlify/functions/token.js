@@ -12,6 +12,8 @@ exports.handler = async (event) => {
   const siteUrl = process.env.SITE_URL || process.env.URL || '';
   const originAllowed =
     (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) ||
+    origin.startsWith('capacitor://localhost') ||
+    origin.startsWith('ionic://localhost') ||
     (siteUrl && origin.startsWith(siteUrl));
   if (!originAllowed) {
     return { statusCode: 403, body: 'Forbidden' };
