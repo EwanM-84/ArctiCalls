@@ -11,7 +11,10 @@ exports.handler = async (event) => {
   const origin = event.headers.origin || event.headers.referer || '';
   const siteUrl = process.env.SITE_URL || process.env.URL || '';
   const originAllowed =
-    (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) ||
+    !origin ||
+    origin.startsWith('http://localhost') ||
+    origin.startsWith('http://127.0.0.1') ||
+    origin.startsWith('https://localhost') ||
     origin.startsWith('capacitor://localhost') ||
     origin.startsWith('ionic://localhost') ||
     (siteUrl && origin.startsWith(siteUrl));
