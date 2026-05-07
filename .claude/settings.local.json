@@ -22,7 +22,13 @@
       "Bash(npm install *)",
       "Bash(npx cap *)",
       "Bash(npm run *)",
-      "PowerShell(Copy-Item *)"
+      "PowerShell(Copy-Item *)",
+      "Bash(git rm *)",
+      "Bash(mkdir -p assets)",
+      "Bash(cp public/png.logo.png assets/icon.png)",
+      "Bash(npx @capacitor/assets generate --android)",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('Voice URL:', d['voice_url']\\); print\\('Method:', d['voice_method']\\)\")",
+      "Bash(python -c ' *)"
     ]
   }
 }

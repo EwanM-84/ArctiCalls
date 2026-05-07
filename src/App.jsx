@@ -1,7 +1,4 @@
 import { useState, useEffect, useRef } from 'react';
-import { Device } from '@twilio/voice-sdk';
-import { Capacitor } from '@capacitor/core';
-import { PushNotifications } from '@capacitor/push-notifications';
 import { supabase } from './lib/supabase';
 import { API_BASE } from './lib/api';
 import { normalizePhone } from './lib/utils';
@@ -11,35 +8,29 @@ import BottomNav from './components/BottomNav';
 import KeypadView from './components/KeypadView';
 import RecentsView from './components/RecentsView';
 import ContactsView from './components/ContactsView';
-import ActiveCallScreen from './components/ActiveCallScreen';
 import ContactModal from './components/ContactModal';
 
 export default function App() {
   // ── Auth ──────────────────────────────────────────────────────────────────
-  const [user, setUser]             = useState(null);
+  const [user, setUser]               = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
 
-  // ── Twilio Device ─────────────────────────────────────────────────────────
-  const [deviceStatus, setDeviceStatus] = useState('loading'); // loading | ready | error
-  const deviceRef = useRef(null);
-
   // ── Call state ────────────────────────────────────────────────────────────
-  const [callStatus, setCallStatus]   = useState('idle'); // idle | calling | ringing | active
+  const [callStatus, setCallStatus]     = useState('idle'); // idle | calling | ringing
   const [dialedNumber, setDialedNumber] = useState('');
   const [currentNumber, setCurrentNumber] = useState('');
-  const [callDuration, setCallDuration]   = useState(0);
-  const [isMuted, setIsMuted]             = useState(false);
-  const [incomingCall, setIncomingCall]   = useState(null); // incoming Call object
-  const callRef          = useRef(null);
-  const timerRef         = useRef(null);
-  const callStartRef     = useRef(null);
-  const currentNumberRef = useRef(''); // ref copy avoids stale closure in call event handlers
-  const pendingCallSidRef = useRef(null); // set when app is opened via push notification
+  const [currentCallSid, setCurrentCallSid] = useState(null);
+  const callTimerRef = useRef(null);
+
+  // ── Callback number (user's real phone that Twilio calls first) ───────────
+  const [callbackNumber, setCallbackNumber] = useState('');
+  const [showSetup, setShowSetup]           = useState(false);
+  const [setupInput, setSetupInput]         = useState('');
 
   // ── UI ────────────────────────────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState('keypad');
-  const [contacts, setContacts]   = useState([]);
-  const [recents, setRecents]     = useState([]);
+  const [activeTab, setActiveTab]   = useState('keypad');
+  const [contacts, setContacts]     = useState([]);
+  const [recents, setRecents]       = useState([]);
   const [contactModal, setContactModal] = useState({ open: false, contact: null });
 
   // ── Auth listener ─────────────────────────────────────────────────────────
@@ -48,140 +39,36 @@ export default function App() {
       setUser(session?.user ?? null);
       setAuthLoading(false);
     });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
       setUser(session?.user ?? null);
     });
-
     return () => subscription.unsubscribe();
   }, []);
 
   // ── Init when user logs in ────────────────────────────────────────────────
   useEffect(() => {
     if (!user) return;
-
     loadContacts();
     loadRecents();
-    registerPush();
-
-    // Init immediately — login tap satisfies AudioContext gesture requirement.
-    // Deferring to first gesture prevents inbound calls from ringing.
-    initDevice();
-
-    return () => {
-      if (deviceRef.current) {
-        deviceRef.current.destroy();
-        deviceRef.current = null;
-      }
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
+    const saved = localStorage.getItem(`cb_${user.id}`);
+    if (saved) {
+      setCallbackNumber(saved);
+    } else {
+      setShowSetup(true);
+    }
   }, [user]); // eslint-disable-line
 
-  // ── Token fetch with exponential backoff ──────────────────────────────────
-  const fetchToken = async (retries = 3) => {
-    for (let attempt = 0; attempt < retries; attempt++) {
-      try {
-        const res = await fetch(`${API_BASE}/.netlify/functions/token`, {
-          credentials: 'same-origin',
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        return data.token;
-      } catch (err) {
-        if (attempt === retries - 1) throw err;
-        await new Promise((r) => setTimeout(r, Math.pow(2, attempt) * 1000));
-      }
+  // ── Auto-reset stuck call state after 5 minutes ───────────────────────────
+  useEffect(() => {
+    if (callStatus === 'ringing') {
+      callTimerRef.current = setTimeout(() => {
+        setCallStatus('idle');
+        setCurrentNumber('');
+        setCurrentCallSid(null);
+      }, 300000);
     }
-  };
-
-  // ── Twilio Device init ────────────────────────────────────────────────────
-  const initDevice = async () => {
-    setDeviceStatus('loading');
-    try {
-      const token = await fetchToken();
-
-      const device = new Device(token, {
-        edge: 'dublin',
-        closeProtection: true,
-        enableImprovedSignalingErrorPrecision: true,
-      });
-
-      device.on('registered', async () => {
-        setDeviceStatus('ready');
-        // If app was opened by a push notification for a held call, accept it now
-        if (pendingCallSidRef.current) {
-          const sid = pendingCallSidRef.current;
-          pendingCallSidRef.current = null;
-          try {
-            await fetch(`${API_BASE}/.netlify/functions/accept-inbound`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ callSid: sid }),
-            });
-          } catch (err) {
-            console.error('accept-inbound failed:', err);
-          }
-        }
-      });
-
-      device.on('error', (err) => {
-        console.error('Twilio Device error:', err);
-        setDeviceStatus('error');
-      });
-
-      device.on('tokenWillExpire', async () => {
-        try {
-          const newToken = await fetchToken();
-          device.updateToken(newToken);
-        } catch (err) {
-          console.error('Token refresh failed:', err);
-        }
-      });
-
-      device.on('incoming', (call) => {
-        setIncomingCall(call);
-        call.on('cancel', () => setIncomingCall(null));
-        call.on('disconnect', () => setIncomingCall(null));
-      });
-
-      await device.register();
-      deviceRef.current = device;
-    } catch (err) {
-      console.error('Device init failed:', err);
-      setDeviceStatus('error');
-    }
-  };
-
-  // ── Push notification registration (Android only) ────────────────────────
-  const registerPush = async () => {
-    if (!Capacitor.isNativePlatform()) return;
-    try {
-      const { receive } = await PushNotifications.requestPermissions();
-      if (receive !== 'granted') return;
-      await PushNotifications.register();
-
-      PushNotifications.addListener('registration', async ({ value: token }) => {
-        await supabase.from('push_tokens').upsert(
-          { user_id: user.id, token, platform: 'android' },
-          { onConflict: 'user_id,token' }
-        );
-      });
-
-      // Foreground push: show in-app banner (Twilio Device will also fire 'incoming')
-      PushNotifications.addListener('pushNotificationReceived', (notification) => {
-        const { pending_call_sid } = notification.data || {};
-        if (pending_call_sid) pendingCallSidRef.current = pending_call_sid;
-      });
-
-      // User tapped the notification while app was backgrounded/killed
-      PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
-        const { pending_call_sid } = action.notification.data || {};
-        if (pending_call_sid) pendingCallSidRef.current = pending_call_sid;
-      });
-    } catch (err) {
-      console.error('Push registration failed:', err);
-    }
-  };
+    return () => clearTimeout(callTimerRef.current);
+  }, [callStatus]);
 
   // ── Data loaders ──────────────────────────────────────────────────────────
   const loadContacts = async () => {
@@ -201,128 +88,72 @@ export default function App() {
     if (data) setRecents(data);
   };
 
-  // ── Make call ─────────────────────────────────────────────────────────────
-  const makeCall = async (number) => {
-    if (deviceStatus !== 'ready' || callStatus !== 'idle') return;
-
-    const normalized = normalizePhone(number);
+  // ── Save callback number ──────────────────────────────────────────────────
+  const saveCallbackNumber = () => {
+    const normalized = normalizePhone(setupInput);
     if (!normalized) return;
-
-    setCurrentNumber(normalized);
-    currentNumberRef.current = normalized;
-    setCallStatus('calling');
-    setCallDuration(0);
-    setIsMuted(false);
-
-    try {
-      const call = await deviceRef.current.connect({ params: { To: normalized } });
-      callRef.current = call;
-
-      call.on('ringing', () => setCallStatus('ringing'));
-
-      call.on('accept', () => {
-        setCallStatus('active');
-        callStartRef.current = Date.now();
-        timerRef.current = setInterval(() => {
-          setCallDuration(Math.floor((Date.now() - callStartRef.current) / 1000));
-        }, 1000);
-      });
-
-      call.on('disconnect', () => handleCallEnd('completed'));
-      call.on('cancel',     () => handleCallEnd('failed'));
-      call.on('reject',     () => handleCallEnd('failed'));
-      call.on('error', (err) => {
-        console.error('Call error:', err);
-        handleCallEnd('failed');
-      });
-    } catch (err) {
-      console.error('makeCall failed:', err);
-      setCallStatus('idle');
-    }
+    localStorage.setItem(`cb_${user.id}`, normalized);
+    setCallbackNumber(normalized);
+    setSetupInput('');
+    setShowSetup(false);
   };
 
-  // ── End call + log to recents ─────────────────────────────────────────────
-  const handleCallEnd = async (status = 'completed') => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+  // ── Make call (Twilio calls your phone first, then connects to destination)
+  const makeCall = async (number) => {
+    if (callStatus !== 'idle') return;
+    const normalized = normalizePhone(number);
+    if (!normalized) return;
+    if (!callbackNumber) { setShowSetup(true); return; }
 
-    const duration = callStartRef.current
-      ? Math.floor((Date.now() - callStartRef.current) / 1000)
-      : 0;
-    const number = currentNumberRef.current;
-    currentNumberRef.current = '';
+    setCurrentNumber(normalized);
+    setCallStatus('calling');
 
-    setCallStatus('idle');
-    setCurrentNumber('');
-    setCallDuration(0);
-    setIsMuted(false);
-    callRef.current      = null;
-    callStartRef.current = null;
+    try {
+      const res = await fetch(`${API_BASE}/.netlify/functions/make-call`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: normalized, callbackNumber }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { callSid } = await res.json();
+      setCurrentCallSid(callSid);
+      setCallStatus('ringing');
 
-    if (number && user) {
-      const contact = contacts.find(
-        (c) => normalizePhone(c.phone) === number
-      );
-      const { error: insertError } = await supabase.from('ArctiCalls_recents').insert({
+      // Log to recents
+      const contact = contacts.find((c) => normalizePhone(c.phone) === normalized);
+      await supabase.from('ArctiCalls_recents').insert({
         user_id:          user.id,
-        phone:            number,
+        phone:            normalized,
         display_name:     contact?.name || null,
         contact_id:       contact?.id   || null,
         direction:        'outbound',
-        duration_seconds: duration,
-        started_at:       new Date(Date.now() - duration * 1000).toISOString(),
-        ended_at:         new Date().toISOString(),
-        status,
+        duration_seconds: 0,
+        started_at:       new Date().toISOString(),
+        ended_at:         null,
+        status:           'initiated',
       });
-      if (insertError) console.error('Failed to log call:', insertError);
       loadRecents();
+    } catch (err) {
+      console.error('makeCall failed:', err);
+      setCallStatus('idle');
+      setCurrentNumber('');
+      setCurrentCallSid(null);
     }
   };
 
-  // ── Incoming call controls ────────────────────────────────────────────────
-  const acceptCall = () => {
-    if (!incomingCall) return;
-    const call = incomingCall;
-    setIncomingCall(null);
-    callRef.current = call;
-    const from = call.parameters?.From || '';
-    setCurrentNumber(from);
-    currentNumberRef.current = from;
-    setCallStatus('active');
-    callStartRef.current = Date.now();
-    timerRef.current = setInterval(() => {
-      setCallDuration(Math.floor((Date.now() - callStartRef.current) / 1000));
-    }, 1000);
-    call.on('disconnect', () => handleCallEnd('completed'));
-    call.on('error', () => handleCallEnd('failed'));
-    call.accept();
-  };
-
-  const rejectCall = () => {
-    if (!incomingCall) return;
-    incomingCall.reject();
-    setIncomingCall(null);
-  };
-
-  // ── Call controls ─────────────────────────────────────────────────────────
-  const hangUp = () => {
-    if (callRef.current) callRef.current.disconnect();
-  };
-
-  const toggleMute = () => {
-    if (callRef.current) {
-      const muted = !isMuted;
-      callRef.current.mute(muted);
-      setIsMuted(muted);
+  // ── Cancel call ───────────────────────────────────────────────────────────
+  const cancelCall = async () => {
+    clearTimeout(callTimerRef.current);
+    if (currentCallSid) {
+      fetch(`${API_BASE}/.netlify/functions/cancel-call`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ callSid: currentCallSid }),
+      }).catch(() => {});
     }
-  };
-
-  const sendDtmf = (digit) => {
-    if (callRef.current && callStatus === 'active') {
-      callRef.current.sendDigits(digit);
-    }
+    setCallStatus('idle');
+    setCurrentNumber('');
+    setCurrentCallSid(null);
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -333,27 +164,98 @@ export default function App() {
     <div className="phone-frame">
       <StatusBar />
 
-      {/* Main content area */}
+      {/* Callback number setup */}
+      {showSetup && (
+        <div
+          className="absolute inset-0 z-50 flex flex-col items-center justify-center px-6"
+          style={{ background: 'rgba(0,0,0,0.97)' }}
+        >
+          <p className="text-white text-xl font-semibold mb-2 text-center">Your Phone Number</p>
+          <p className="text-sm text-center mb-6" style={{ color: 'var(--ios-label3)' }}>
+            When you make a call, your phone will ring first. Answer it to connect to the person you dialled.
+          </p>
+          <input
+            type="tel"
+            value={setupInput}
+            onChange={(e) => setSetupInput(e.target.value)}
+            placeholder="+44 7xxx xxxxxx"
+            className="w-full p-3 rounded-xl text-white text-center text-lg mb-4"
+            style={{ background: '#1c1c1e', border: '1px solid #38383a' }}
+          />
+          <button
+            onClick={saveCallbackNumber}
+            className="w-full p-3 rounded-xl text-white font-semibold text-lg"
+            style={{ background: 'var(--ios-blue)' }}
+          >
+            Save
+          </button>
+          {callbackNumber ? (
+            <button
+              onClick={() => setShowSetup(false)}
+              className="mt-3 text-sm"
+              style={{ color: 'var(--ios-label3)' }}
+            >
+              Cancel
+            </button>
+          ) : null}
+        </div>
+      )}
+
+      {/* Call in progress overlay */}
+      {callStatus !== 'idle' && (
+        <div
+          className="absolute inset-0 z-40 flex flex-col items-center justify-between px-6 py-12"
+          style={{ background: '#000' }}
+        >
+          <div className="flex flex-col items-center mt-16 gap-3">
+            <div
+              className="w-20 h-20 rounded-full flex items-center justify-center text-3xl font-bold"
+              style={{ background: 'var(--ios-label3)', color: '#fff' }}
+            >
+              {currentNumber[0] || '?'}
+            </div>
+            <p className="text-white text-2xl font-semibold mt-2">{currentNumber}</p>
+            {callStatus === 'calling' && (
+              <p className="text-sm" style={{ color: 'var(--ios-label3)' }}>Placing call…</p>
+            )}
+            {callStatus === 'ringing' && (
+              <div className="flex flex-col items-center gap-1 mt-2">
+                <p className="text-white text-base font-medium">Your phone is ringing</p>
+                <p className="text-sm text-center px-4" style={{ color: 'var(--ios-label3)' }}>
+                  Answer your phone to connect to {currentNumber}
+                </p>
+                <p className="text-xs mt-1" style={{ color: 'var(--ios-label3)' }}>
+                  Calling via {callbackNumber}
+                </p>
+              </div>
+            )}
+          </div>
+          <button
+            onClick={cancelCall}
+            className="w-16 h-16 rounded-full flex items-center justify-center mb-8"
+            style={{ backgroundColor: '#FF3B30' }}
+          >
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="white" style={{ transform: 'rotate(135deg)' }}>
+              <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.25.2 2.45.6 3.6.1.3 0 .7-.2 1L6.6 10.8z" />
+            </svg>
+          </button>
+        </div>
+      )}
+
+      {/* Main content */}
       <div className="flex-1 overflow-hidden" style={{ background: 'var(--ios-bg)' }}>
         {activeTab === 'keypad' && (
           <KeypadView
             dialedNumber={dialedNumber}
             setDialedNumber={setDialedNumber}
-            deviceStatus={deviceStatus}
+            deviceStatus="ready"
             callStatus={callStatus}
-            onCall={(num) => {
-              makeCall(num);
-              setDialedNumber('');
-            }}
-            onRetryDevice={initDevice}
+            onCall={(num) => { makeCall(num); setDialedNumber(''); }}
+            onRetryDevice={() => {}}
           />
         )}
         {activeTab === 'recents' && (
-          <RecentsView
-            recents={recents}
-            contacts={contacts}
-            onCall={makeCall}
-          />
+          <RecentsView recents={recents} contacts={contacts} onCall={makeCall} />
         )}
         {activeTab === 'contacts' && (
           <ContactsView
@@ -367,73 +269,25 @@ export default function App() {
 
       <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} />
 
-      {/* Incoming call banner */}
-      {incomingCall && (
-        <div
-          className="absolute inset-x-0 top-0 z-50 flex flex-col items-center justify-between px-6 py-8"
-          style={{ background: 'rgba(0,0,0,0.92)', minHeight: '100%' }}
+      {/* Settings button to change callback number */}
+      {callStatus === 'idle' && (
+        <button
+          onClick={() => { setSetupInput(callbackNumber); setShowSetup(true); }}
+          className="absolute top-4 right-4 z-30 text-xs px-2 py-1 rounded"
+          style={{ color: 'var(--ios-label3)', background: 'transparent' }}
         >
-          <div className="flex flex-col items-center mt-12 gap-3">
-            <div
-              className="w-20 h-20 rounded-full flex items-center justify-center text-3xl font-bold"
-              style={{ background: 'var(--ios-label3)', color: '#fff' }}
-            >
-              {(incomingCall.parameters?.From || '?')[0]}
-            </div>
-            <p className="text-white text-2xl font-semibold mt-2">
-              {incomingCall.parameters?.From || 'Unknown'}
-            </p>
-            <p className="text-sm" style={{ color: 'var(--ios-label3)' }}>Incoming call</p>
-          </div>
-          <div className="flex gap-16 mb-8">
-            <button
-              onClick={rejectCall}
-              className="w-16 h-16 rounded-full flex items-center justify-center"
-              style={{ backgroundColor: '#FF3B30' }}
-            >
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="white" style={{ transform: 'rotate(135deg)' }}>
-                <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.25.2 2.45.6 3.6.1.3 0 .7-.2 1L6.6 10.8z" />
-              </svg>
-            </button>
-            <button
-              onClick={acceptCall}
-              className="w-16 h-16 rounded-full flex items-center justify-center"
-              style={{ backgroundColor: '#34C759' }}
-            >
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="white">
-                <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.25.2 2.45.6 3.6.1.3 0 .7-.2 1L6.6 10.8z" />
-              </svg>
-            </button>
-          </div>
-        </div>
+          {callbackNumber ? `📞 ${callbackNumber}` : 'Set number'}
+        </button>
       )}
 
-      {/* Active call overlay */}
-      {callStatus !== 'idle' && (
-        <ActiveCallScreen
-          callStatus={callStatus}
-          currentNumber={currentNumber}
-          callDuration={callDuration}
-          isMuted={isMuted}
-          contacts={contacts}
-          device={deviceRef.current}
-          onHangUp={hangUp}
-          onToggleMute={toggleMute}
-          onSendDtmf={sendDtmf}
-        />
-      )}
-
-      {/* Contact add/edit modal */}
+      {/* Contact modal */}
       {contactModal.open && (
         <ContactModal
           contact={contactModal.contact}
           onClose={() => setContactModal({ open: false, contact: null })}
           onSave={async (data) => {
             if (contactModal.contact) {
-              await supabase
-                .from('ArctiCalls_contacts')
-                .update({ ...data, updated_at: new Date().toISOString() })
-                .eq('id', contactModal.contact.id);
+              await supabase.from('ArctiCalls_contacts').update({ ...data, updated_at: new Date().toISOString() }).eq('id', contactModal.contact.id);
             } else {
               await supabase.from('ArctiCalls_contacts').insert(data);
             }
@@ -442,10 +296,7 @@ export default function App() {
           }}
           onDelete={async () => {
             if (contactModal.contact) {
-              await supabase
-                .from('ArctiCalls_contacts')
-                .delete()
-                .eq('id', contactModal.contact.id);
+              await supabase.from('ArctiCalls_contacts').delete().eq('id', contactModal.contact.id);
               loadContacts();
             }
             setContactModal({ open: false, contact: null });
