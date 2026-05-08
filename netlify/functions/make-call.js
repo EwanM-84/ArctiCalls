@@ -30,7 +30,9 @@ exports.handler = async (event) => {
     return { statusCode: 400, headers: corsHeaders(origin), body: 'Missing to or callbackNumber' };
   }
 
-  const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+  const client = twilio(process.env.TWILIO_API_KEY_SID, process.env.TWILIO_API_KEY_SECRET, {
+    accountSid: process.env.TWILIO_ACCOUNT_SID,
+  });
   const siteUrl = 'https://arcticalls.netlify.app';
 
   const call = await client.calls.create({

@@ -27,7 +27,9 @@ exports.handler = async (event) => {
   }
 
   try {
-    const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
+    const client = twilio(process.env.TWILIO_API_KEY_SID, process.env.TWILIO_API_KEY_SECRET, {
+      accountSid: process.env.TWILIO_ACCOUNT_SID,
+    });
     await client.calls(callSid).update({ status: 'completed' });
   } catch (err) {
     console.error('cancel-call error:', err);
