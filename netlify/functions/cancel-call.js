@@ -1,13 +1,29 @@
 const twilio = require('twilio');
 
+function corsHeaders(origin) {
+  return {
+    'Access-Control-Allow-Origin': origin || '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+}
+
 exports.handler = async (event) => {
-  if (event.httpMethod !== 'POST') return { statusCode: 405, body: 'Method Not Allowed' };
+  const origin = event.headers.origin || event.headers.referer || '*';
+
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 204, headers: corsHeaders(origin), body: '' };
+  }
+
+  if (event.httpMethod !== 'POST') {
+    return { statusCode: 405, headers: corsHeaders(origin), body: 'Method Not Allowed' };
+  }
 
   let callSid;
   try {
     ({ callSid } = JSON.parse(event.body));
   } catch {
-    return { statusCode: 400, body: 'Bad Request' };
+    return { statusCode: 400, headers: corsHeaders(origin), body: 'Bad Request' };
   }
 
   try {
@@ -17,5 +33,5 @@ exports.handler = async (event) => {
     console.error('cancel-call error:', err);
   }
 
-  return { statusCode: 200, body: 'ok' };
+  return { statusCode: 200, headers: corsHeaders(origin), body: 'ok' };
 };

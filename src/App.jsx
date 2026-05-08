@@ -24,7 +24,6 @@ export default function App() {
 
   // ── Callback number (user's real phone that Twilio calls first) ───────────
   const [callbackNumber, setCallbackNumber] = useState('');
-  const [showSetup, setShowSetup]           = useState(false);
   const [setupInput, setSetupInput]         = useState('');
 
   // ── UI ────────────────────────────────────────────────────────────────────
@@ -51,11 +50,7 @@ export default function App() {
     loadContacts();
     loadRecents();
     const saved = localStorage.getItem(`cb_${user.id}`);
-    if (saved) {
-      setCallbackNumber(saved);
-    } else {
-      setShowSetup(true);
-    }
+    if (saved) setCallbackNumber(saved);
   }, [user]); // eslint-disable-line
 
   // ── Auto-reset stuck call state after 5 minutes ───────────────────────────
@@ -95,7 +90,6 @@ export default function App() {
     localStorage.setItem(`cb_${user.id}`, normalized);
     setCallbackNumber(normalized);
     setSetupInput('');
-    setShowSetup(false);
   };
 
   // ── Make call (Twilio calls your phone first, then connects to destination)
@@ -165,7 +159,7 @@ export default function App() {
       <StatusBar />
 
       {/* Callback number setup */}
-      {showSetup && (
+      {!callbackNumber && (
         <div
           className="absolute inset-0 z-50 flex flex-col items-center justify-center px-6"
           style={{ background: 'rgba(0,0,0,0.97)' }}

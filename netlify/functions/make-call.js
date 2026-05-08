@@ -1,16 +1,34 @@
 const twilio = require('twilio');
 
+function corsHeaders(origin) {
+  return {
+    'Access-Control-Allow-Origin': origin || '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+  };
+}
+
 exports.handler = async (event) => {
-  if (event.httpMethod !== 'POST') return { statusCode: 405, body: 'Method Not Allowed' };
+  const origin = event.headers.origin || event.headers.referer || '*';
+
+  if (event.httpMethod === 'OPTIONS') {
+    return { statusCode: 204, headers: corsHeaders(origin), body: '' };
+  }
+
+  if (event.httpMethod !== 'POST') {
+    return { statusCode: 405, headers: corsHeaders(origin), body: 'Method Not Allowed' };
+  }
 
   let to, callbackNumber;
   try {
     ({ to, callbackNumber } = JSON.parse(event.body));
   } catch {
-    return { statusCode: 400, body: 'Bad Request' };
+    return { statusCode: 400, headers: corsHeaders(origin), body: 'Bad Request' };
   }
 
-  if (!to || !callbackNumber) return { statusCode: 400, body: 'Missing to or callbackNumber' };
+  if (!to || !callbackNumber) {
+    return { statusCode: 400, headers: corsHeaders(origin), body: 'Missing to or callbackNumber' };
+  }
 
   const client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
   const siteUrl = 'https://arcticalls.netlify.app';
@@ -24,7 +42,7 @@ exports.handler = async (event) => {
 
   return {
     statusCode: 200,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...corsHeaders(origin) },
     body: JSON.stringify({ callSid: call.sid }),
   };
 };
