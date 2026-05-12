@@ -1,4 +1,4 @@
-// Inbound calls forwarded to TWILIO_FORWARD_NUMBER
+// Inbound calls: log caller + forward to TWILIO_FORWARD_NUMBER
 
 function normalizeUK(phone) {
   if (!phone) return '';
@@ -9,9 +9,27 @@ function normalizeUK(phone) {
   return n;
 }
 
-exports.handler = async () => {
+exports.handler = async (event) => {
   const twilioNumber = process.env.TWILIO_PHONE_NUMBER;
   const forwardNumber = normalizeUK(process.env.TWILIO_FORWARD_NUMBER || '');
+  const siteUrl = 'https://arcticalls.netlify.app';
+
+  let from = '';
+  if (event.httpMethod === 'POST' && event.body) {
+    const params = new URLSearchParams(event.body);
+    from = params.get('From') || '';
+  } else {
+    from = event.queryStringParameters?.From || '';
+  }
+
+  // Log the inbound call asynchronously (fire-and-forget)
+  if (from) {
+    fetch(`${siteUrl}/.netlify/functions/log-inbound`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from }),
+    }).catch(() => {});
+  }
 
   if (!forwardNumber) {
     return {
@@ -26,7 +44,7 @@ exports.handler = async () => {
     headers: { 'Content-Type': 'text/xml' },
     body: `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Dial timeout="30" callerId="${twilioNumber}">
+  <Dial timeout="30" callerId="${from || twilioNumber}">
     <Number>${forwardNumber}</Number>
   </Dial>
 </Response>`,
