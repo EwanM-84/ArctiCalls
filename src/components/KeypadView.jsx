@@ -21,6 +21,7 @@ export default function KeypadView({
   deviceStatus,
   callStatus,
   onCall,
+  onBackupCall,
   onRetryDevice,
 }) {
   const longPressTimer  = useRef(null);
@@ -58,6 +59,12 @@ export default function KeypadView({
   const handleCall = () => {
     if (dialedNumber && callStatus === 'idle') {
       onCall(dialedNumber);
+    }
+  };
+
+  const handleBackupCall = () => {
+    if (dialedNumber && callStatus === 'idle') {
+      onBackupCall(dialedNumber);
     }
   };
 
@@ -196,22 +203,38 @@ export default function KeypadView({
         </div>
 
         {/* Call button row */}
-        <div className="flex items-center justify-center py-3">
-          <button
-            onClick={handleCall}
-            disabled={!canCall}
-            className="rounded-full flex items-center justify-center transition-transform active:scale-95 disabled:opacity-40"
-            style={{
-              width: 72,
-              height: 72,
-              backgroundColor: '#34C759',
-              boxShadow: canCall ? '0 0 0 10px rgba(52,199,89,0.18)' : 'none',
-            }}
-          >
-            <svg width="30" height="30" viewBox="0 0 24 24" fill="white">
-              <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.25.2 2.45.6 3.6.1.3 0 .7-.2 1L6.6 10.8z" />
-            </svg>
-          </button>
+        <div className="flex flex-col items-center justify-center gap-3 py-3">
+          <div className="flex flex-col items-center gap-1">
+            <button
+              onClick={handleCall}
+              disabled={!canCall}
+              className="rounded-full flex items-center justify-center transition-transform active:scale-95 disabled:opacity-40"
+              style={{
+                width: 72,
+                height: 72,
+                backgroundColor: '#34C759',
+                boxShadow: canCall ? '0 0 0 10px rgba(52,199,89,0.18)' : 'none',
+              }}
+            >
+              <svg width="30" height="30" viewBox="0 0 24 24" fill="white">
+                <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1-9.4 0-17-7.6-17-17 0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.25.2 2.45.6 3.6.1.3 0 .7-.2 1L6.6 10.8z" />
+              </svg>
+            </button>
+            <span className="text-xs" style={{ color: 'var(--ios-label3)' }}>
+              Internet call
+            </span>
+          </div>
+
+          {dialedNumber && (
+            <button
+              onClick={handleBackupCall}
+              disabled={callStatus !== 'idle'}
+              className="px-4 py-2 rounded-full text-sm font-semibold transition-opacity active:opacity-70 disabled:opacity-40"
+              style={{ color: 'var(--ios-blue)', backgroundColor: '#E8F1FF' }}
+            >
+              Phone backup
+            </button>
+          )}
         </div>
       </div>
     </div>

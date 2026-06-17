@@ -545,6 +545,10 @@ export default function App() {
               makeCall(num);
               setDialedNumber('');
             }}
+            onBackupCall={(num) => {
+              makeCallbackCall(num);
+              setDialedNumber('');
+            }}
             onRetryDevice={() => window.location.reload()}
           />
         )}
