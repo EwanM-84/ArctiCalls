@@ -31,6 +31,7 @@ export default function App() {
   const [contacts, setContacts]     = useState([]);
   const [recents, setRecents]       = useState([]);
   const [contactModal, setContactModal] = useState({ open: false, contact: null });
+  const [showSetup, setShowSetup] = useState(false);
 
   // ── Auth listener ─────────────────────────────────────────────────────────
   useEffect(() => {

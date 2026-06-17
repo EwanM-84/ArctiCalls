@@ -33,7 +33,7 @@
 
 ### 2c. Phone Number
 - Ensure you have a Twilio number with **Voice** capability
-- Use E.164 format, e.g. `+447426799830`
+- Use E.164 format, e.g. `+447307263285`
 
 ---
 
@@ -51,7 +51,7 @@
 | `TWILIO_API_KEY_SID` | `SK…` (from step 2a) |
 | `TWILIO_API_KEY_SECRET` | Secret from step 2a |
 | `TWILIO_TWIML_APP_SID` | `AP…` (from step 2b) |
-| `TWILIO_PHONE_NUMBER` | `+447426799830` |
+| `TWILIO_PHONE_NUMBER` | `+447307263285` |
 | `SITE_URL` | `https://YOUR-SITE.netlify.app` |
 
 ### Frontend (baked at build time — safe to expose):
