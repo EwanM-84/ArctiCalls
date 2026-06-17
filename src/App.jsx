@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { Device } from '@twilio/voice-sdk';
 import { supabase } from './lib/supabase';
 import { API_BASE } from './lib/api';
 import { normalizePhone } from './lib/utils';
@@ -9,31 +10,45 @@ import KeypadView from './components/KeypadView';
 import RecentsView from './components/RecentsView';
 import ContactsView from './components/ContactsView';
 import ContactModal from './components/ContactModal';
+import ActiveCallScreen from './components/ActiveCallScreen';
+
+const EMPTY_PHASE = {
+  title: '',
+  detail: '',
+  terminal: false,
+};
 
 export default function App() {
-  // ── Auth ──────────────────────────────────────────────────────────────────
-  const [user, setUser]               = useState(null);
+  const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
 
-  // ── Call state ────────────────────────────────────────────────────────────
-  const [callStatus, setCallStatus]     = useState('idle'); // idle | calling | ringing
+  const [deviceStatus, setDeviceStatus] = useState('connecting');
+  const [deviceError, setDeviceError] = useState('');
+  const [callStatus, setCallStatus] = useState('idle'); // idle | calling | ringing | active
+  const [callMode, setCallMode] = useState(null); // softphone | callback
   const [dialedNumber, setDialedNumber] = useState('');
   const [currentNumber, setCurrentNumber] = useState('');
   const [currentCallSid, setCurrentCallSid] = useState(null);
+  const [callPhase, setCallPhase] = useState(EMPTY_PHASE);
+  const [callError, setCallError] = useState('');
+  const [callDuration, setCallDuration] = useState(0);
+  const [isMuted, setIsMuted] = useState(false);
+  const [lastFailedNumber, setLastFailedNumber] = useState('');
+
+  const deviceRef = useRef(null);
+  const activeCallRef = useRef(null);
   const callTimerRef = useRef(null);
+  const durationTimerRef = useRef(null);
 
-  // ── Callback number (user's real phone that Twilio calls first) ───────────
   const [callbackNumber, setCallbackNumber] = useState('');
-  const [setupInput, setSetupInput]         = useState('');
+  const [setupInput, setSetupInput] = useState('');
 
-  // ── UI ────────────────────────────────────────────────────────────────────
-  const [activeTab, setActiveTab]   = useState('keypad');
-  const [contacts, setContacts]     = useState([]);
-  const [recents, setRecents]       = useState([]);
+  const [activeTab, setActiveTab] = useState('keypad');
+  const [contacts, setContacts] = useState([]);
+  const [recents, setRecents] = useState([]);
   const [contactModal, setContactModal] = useState({ open: false, contact: null });
   const [showSetup, setShowSetup] = useState(false);
 
-  // ── Auth listener ─────────────────────────────────────────────────────────
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
@@ -45,28 +60,143 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // ── Init when user logs in ────────────────────────────────────────────────
   useEffect(() => {
     if (!user) return;
     loadContacts();
     loadRecents();
     const saved = localStorage.getItem(`cb_${user.id}`);
     if (saved) setCallbackNumber(saved);
-  }, [user]); // eslint-disable-line
+  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Auto-reset stuck call state after 5 minutes ───────────────────────────
   useEffect(() => {
-    if (callStatus === 'ringing') {
-      callTimerRef.current = setTimeout(() => {
-        setCallStatus('idle');
-        setCurrentNumber('');
-        setCurrentCallSid(null);
-      }, 300000);
+    if (!user) return undefined;
+
+    let cancelled = false;
+
+    const setupDevice = async () => {
+      setDeviceStatus('connecting');
+      setDeviceError('');
+
+      try {
+        const token = await fetchVoiceToken();
+        if (cancelled) return;
+
+        const nextDevice = new Device(token, {
+          appName: 'ArctiCalls',
+          appVersion: '1.0.0',
+          closeProtection: true,
+          enableImprovedSignalingErrorPrecision: true,
+        });
+
+        nextDevice.on('registered', () => {
+          setDeviceStatus('ready');
+          setDeviceError('');
+        });
+        nextDevice.on('registering', () => setDeviceStatus('connecting'));
+        nextDevice.on('unregistered', () => setDeviceStatus('connecting'));
+        nextDevice.on('error', (error) => {
+          console.error('Twilio device error:', error);
+          setDeviceStatus('error');
+          setDeviceError(error.message || 'Internet calling is not available.');
+        });
+        nextDevice.on('tokenWillExpire', async () => {
+          try {
+            nextDevice.updateToken(await fetchVoiceToken());
+          } catch (error) {
+            console.error('Token refresh failed:', error);
+          }
+        });
+
+        await nextDevice.register();
+        if (cancelled) {
+          nextDevice.destroy();
+          return;
+        }
+
+        deviceRef.current = nextDevice;
+      } catch (error) {
+        console.error('Twilio setup failed:', error);
+        if (!cancelled) {
+          setDeviceStatus('error');
+          setDeviceError(error.message || 'Internet calling is not available.');
+        }
+      }
+    };
+
+    setupDevice();
+
+    return () => {
+      cancelled = true;
+      activeCallRef.current?.disconnect();
+      deviceRef.current?.destroy();
+      deviceRef.current = null;
+      activeCallRef.current = null;
+    };
+  }, [user]);
+
+  useEffect(() => {
+    if (callStatus === 'active') {
+      durationTimerRef.current = setInterval(() => {
+        setCallDuration((value) => value + 1);
+      }, 1000);
     }
-    return () => clearTimeout(callTimerRef.current);
+    return () => clearInterval(durationTimerRef.current);
   }, [callStatus]);
 
-  // ── Data loaders ──────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!currentCallSid || callMode !== 'callback' || callStatus === 'idle') return undefined;
+
+    let cancelled = false;
+    let resetTimer = null;
+
+    const checkStatus = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/.netlify/functions/get-call-status`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ callSid: currentCallSid }),
+        });
+        if (!res.ok) return;
+
+        const data = await res.json();
+        if (cancelled) return;
+
+        setCallPhase({
+          title: data.title || 'Checking call',
+          detail: data.detail || '',
+          terminal: Boolean(data.terminal),
+        });
+
+        if (data.phase === 'connected') setCallStatus('active');
+
+        if (data.terminal && !resetTimer) {
+          resetTimer = setTimeout(resetCallState, 3500);
+        }
+      } catch (error) {
+        console.error('get-call-status failed:', error);
+      }
+    };
+
+    checkStatus();
+    const interval = setInterval(checkStatus, 2500);
+    callTimerRef.current = setTimeout(resetCallState, 300000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      clearTimeout(resetTimer);
+      clearTimeout(callTimerRef.current);
+    };
+  }, [currentCallSid, callMode, callStatus]);
+
+  const fetchVoiceToken = async () => {
+    const res = await fetch(`${API_BASE}/.netlify/functions/token`);
+    if (!res.ok) throw new Error(`Token request failed: HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.token) throw new Error('Token response did not include a token.');
+    return data.token;
+  };
+
   const loadContacts = async () => {
     const { data } = await supabase
       .from('ArctiCalls_contacts')
@@ -84,24 +214,137 @@ export default function App() {
     if (data) setRecents(data);
   };
 
-  // ── Save callback number ──────────────────────────────────────────────────
   const saveCallbackNumber = () => {
     const normalized = normalizePhone(setupInput);
-    if (!normalized) return;
+    if (!normalized) {
+      setCallError('Enter the backup mobile in international format, for example +905...');
+      return;
+    }
     localStorage.setItem(`cb_${user.id}`, normalized);
     setCallbackNumber(normalized);
     setSetupInput('');
+    setShowSetup(false);
+    setCallError('');
   };
 
-  // ── Make call (Twilio calls your phone first, then connects to destination)
-  const makeCall = async (number) => {
-    if (callStatus !== 'idle') return;
-    const normalized = normalizePhone(number);
-    if (!normalized) return;
-    if (!callbackNumber) { setShowSetup(true); return; }
+  const logRecent = async (number) => {
+    const contact = contacts.find((c) => normalizePhone(c.phone) === number);
+    await supabase.from('ArctiCalls_recents').insert({
+      user_id: user.id,
+      phone: number,
+      display_name: contact?.name || null,
+      contact_id: contact?.id || null,
+      direction: 'outbound',
+      duration_seconds: 0,
+      started_at: new Date().toISOString(),
+      ended_at: null,
+      status: 'completed',
+    });
+    loadRecents();
+  };
 
+  const resetCallState = () => {
+    clearTimeout(callTimerRef.current);
+    clearInterval(durationTimerRef.current);
+    setCallStatus('idle');
+    setCallMode(null);
+    setCurrentNumber('');
+    setCurrentCallSid(null);
+    setCallPhase(EMPTY_PHASE);
+    setCallDuration(0);
+    setIsMuted(false);
+    activeCallRef.current = null;
+  };
+
+  const makeCall = async (number) => {
+    const normalized = normalizePhone(number);
+    if (!normalized || callStatus !== 'idle') return;
+
+    if (deviceStatus !== 'ready' || !deviceRef.current) {
+      if (callbackNumber) {
+        await makeCallbackCall(normalized);
+      } else {
+        setLastFailedNumber(normalized);
+        setShowSetup(true);
+        setCallError('Internet calling is not ready. Add her mobile number to use phone backup.');
+      }
+      return;
+    }
+
+    setCallError('');
+    setLastFailedNumber('');
     setCurrentNumber(normalized);
+    setCallMode('softphone');
     setCallStatus('calling');
+    setCallPhase({
+      title: 'Calling through the app',
+      detail: 'Allow microphone access if the browser asks.',
+      terminal: false,
+    });
+
+    try {
+      const call = await deviceRef.current.connect({
+        params: { To: normalized },
+      });
+
+      activeCallRef.current = call;
+
+      call.on('ringing', () => {
+        setCallStatus('ringing');
+        setCallPhase({
+          title: 'Customer phone is ringing',
+          detail: 'Speak through this app when they answer.',
+          terminal: false,
+        });
+      });
+      call.on('accept', () => {
+        setCallStatus('active');
+        setCallPhase({
+          title: 'Connected',
+          detail: 'You are speaking through the app.',
+          terminal: false,
+        });
+      });
+      call.on('disconnect', resetCallState);
+      call.on('cancel', resetCallState);
+      call.on('reject', resetCallState);
+      call.on('error', (error) => {
+        console.error('Softphone call error:', error);
+        setLastFailedNumber(normalized);
+        setCallError(error.message || 'The internet call failed. Use phone backup if needed.');
+        resetCallState();
+      });
+
+      await logRecent(normalized);
+    } catch (error) {
+      console.error('Softphone connect failed:', error);
+      setLastFailedNumber(normalized);
+      setCallError(error.message || 'The internet call failed. Use phone backup if needed.');
+      resetCallState();
+    }
+  };
+
+  const makeCallbackCall = async (number = currentNumber || lastFailedNumber) => {
+    const normalized = normalizePhone(number);
+    if (!normalized || callStatus !== 'idle') return;
+
+    if (!callbackNumber) {
+      setLastFailedNumber(normalized);
+      setShowSetup(true);
+      setCallError('Add her mobile number first to use phone backup.');
+      return;
+    }
+
+    setCallError('');
+    setLastFailedNumber('');
+    setCurrentNumber(normalized);
+    setCallMode('callback');
+    setCallStatus('calling');
+    setCallPhase({
+      title: 'Calling backup phone',
+      detail: `Twilio will ring ${callbackNumber} first. Answer it to connect the customer.`,
+      terminal: false,
+    });
 
     try {
       const res = await fetch(`${API_BASE}/.netlify/functions/make-call`, {
@@ -109,36 +352,33 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ to: normalized, callbackNumber }),
       });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const { callSid } = await res.json();
-      setCurrentCallSid(callSid);
-      setCallStatus('ringing');
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(payload.message || `HTTP ${res.status}`);
 
-      // Log to recents
-      const contact = contacts.find((c) => normalizePhone(c.phone) === normalized);
-      await supabase.from('ArctiCalls_recents').insert({
-        user_id:          user.id,
-        phone:            normalized,
-        display_name:     contact?.name || null,
-        contact_id:       contact?.id   || null,
-        direction:        'outbound',
-        duration_seconds: 0,
-        started_at:       new Date().toISOString(),
-        ended_at:         null,
-        status:           'initiated',
+      setCurrentCallSid(payload.callSid);
+      setCallStatus('ringing');
+      setCallPhase({
+        title: 'Backup phone is ringing',
+        detail: 'Answer the mobile call, then stay on the line while Twilio calls the customer.',
+        terminal: false,
       });
-      loadRecents();
-    } catch (err) {
-      console.error('makeCall failed:', err);
-      setCallStatus('idle');
-      setCurrentNumber('');
-      setCurrentCallSid(null);
+
+      await logRecent(normalized);
+    } catch (error) {
+      console.error('Callback call failed:', error);
+      setLastFailedNumber(normalized);
+      setCallError(error.message || 'Phone backup could not start.');
+      resetCallState();
     }
   };
 
-  // ── Cancel call ───────────────────────────────────────────────────────────
   const cancelCall = async () => {
-    clearTimeout(callTimerRef.current);
+    if (callMode === 'softphone') {
+      activeCallRef.current?.disconnect();
+      resetCallState();
+      return;
+    }
+
     if (currentCallSid) {
       fetch(`${API_BASE}/.netlify/functions/cancel-call`, {
         method: 'POST',
@@ -146,34 +386,65 @@ export default function App() {
         body: JSON.stringify({ callSid: currentCallSid }),
       }).catch(() => {});
     }
-    setCallStatus('idle');
-    setCurrentNumber('');
-    setCurrentCallSid(null);
+    resetCallState();
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  const toggleMute = () => {
+    const nextMuted = !isMuted;
+    activeCallRef.current?.mute(nextMuted);
+    setIsMuted(nextMuted);
+  };
+
+  const sendDtmf = (digit) => {
+    activeCallRef.current?.sendDigits(digit);
+  };
+
   if (authLoading) return null;
   if (!user) return <AuthGate />;
+
+  const canShowBackupRetry = callStatus === 'idle' && lastFailedNumber;
 
   return (
     <div className="phone-frame">
       <StatusBar />
 
-      {/* Callback number setup */}
-      {!callbackNumber && (
+      {callError && callStatus === 'idle' && (
+        <div
+          className="mx-4 mt-2 px-3 py-2 rounded-xl text-sm"
+          style={{ background: '#FFE5E5', color: '#B00020' }}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <span>{callError}</span>
+            <button onClick={() => setCallError('')} className="font-semibold">
+              Dismiss
+            </button>
+          </div>
+          {canShowBackupRetry && (
+            <button
+              onClick={() => makeCallbackCall(lastFailedNumber)}
+              className="mt-2 w-full rounded-lg px-3 py-2 text-white font-semibold"
+              style={{ background: 'var(--ios-blue)' }}
+            >
+              Use phone backup
+            </button>
+          )}
+        </div>
+      )}
+
+      {showSetup && (
         <div
           className="absolute inset-0 z-50 flex flex-col items-center justify-center px-6"
           style={{ background: 'rgba(0,0,0,0.97)' }}
         >
-          <p className="text-white text-xl font-semibold mb-2 text-center">Your Phone Number</p>
+          <p className="text-white text-xl font-semibold mb-2 text-center">Backup Mobile Number</p>
           <p className="text-sm text-center mb-6" style={{ color: 'var(--ios-label3)' }}>
-            When you make a call, your phone will ring first. Answer it to connect to the person you dialled.
+            Internet calls happen inside the app. If internet is poor, Twilio can ring her mobile first as backup.
           </p>
           <input
             type="tel"
             value={setupInput}
             onChange={(e) => setSetupInput(e.target.value)}
-            placeholder="+44 7xxx xxxxxx"
+            placeholder="+90 5xx xxx xxxx"
             className="w-full p-3 rounded-xl text-white text-center text-lg mb-4"
             style={{ background: '#1c1c1e', border: '1px solid #38383a' }}
           />
@@ -182,22 +453,33 @@ export default function App() {
             className="w-full p-3 rounded-xl text-white font-semibold text-lg"
             style={{ background: 'var(--ios-blue)' }}
           >
-            Save
+            Save backup number
           </button>
-          {callbackNumber ? (
-            <button
-              onClick={() => setShowSetup(false)}
-              className="mt-3 text-sm"
-              style={{ color: 'var(--ios-label3)' }}
-            >
-              Cancel
-            </button>
-          ) : null}
+          <button
+            onClick={() => setShowSetup(false)}
+            className="mt-3 text-sm"
+            style={{ color: 'var(--ios-label3)' }}
+          >
+            Cancel
+          </button>
         </div>
       )}
 
-      {/* Call in progress overlay */}
-      {callStatus !== 'idle' && (
+      {callMode === 'softphone' && callStatus !== 'idle' && (
+        <ActiveCallScreen
+          callStatus={callStatus}
+          currentNumber={currentNumber}
+          callDuration={callDuration}
+          isMuted={isMuted}
+          contacts={contacts}
+          device={deviceRef.current}
+          onHangUp={cancelCall}
+          onToggleMute={toggleMute}
+          onSendDtmf={sendDtmf}
+        />
+      )}
+
+      {callMode === 'callback' && callStatus !== 'idle' && (
         <div
           className="absolute inset-0 z-40 flex flex-col items-center justify-between px-6 py-12"
           style={{ background: '#000' }}
@@ -210,20 +492,17 @@ export default function App() {
               {currentNumber[0] || '?'}
             </div>
             <p className="text-white text-2xl font-semibold mt-2">{currentNumber}</p>
-            {callStatus === 'calling' && (
-              <p className="text-sm" style={{ color: 'var(--ios-label3)' }}>Placing call…</p>
-            )}
-            {callStatus === 'ringing' && (
-              <div className="flex flex-col items-center gap-1 mt-2">
-                <p className="text-white text-base font-medium">Your phone is ringing</p>
-                <p className="text-sm text-center px-4" style={{ color: 'var(--ios-label3)' }}>
-                  Answer your phone to connect to {currentNumber}
-                </p>
-                <p className="text-xs mt-1" style={{ color: 'var(--ios-label3)' }}>
-                  Calling via {callbackNumber}
-                </p>
-              </div>
-            )}
+            <div className="flex flex-col items-center gap-1 mt-2">
+              <p className="text-white text-base font-medium">
+                {callPhase.title || 'Calling backup phone'}
+              </p>
+              <p className="text-sm text-center px-4" style={{ color: 'var(--ios-label3)' }}>
+                {callPhase.detail || 'Answer the mobile call to connect.'}
+              </p>
+              <p className="text-xs mt-1" style={{ color: 'var(--ios-label3)' }}>
+                Backup: {callbackNumber}
+              </p>
+            </div>
           </div>
           <button
             onClick={cancelCall}
@@ -237,16 +516,18 @@ export default function App() {
         </div>
       )}
 
-      {/* Main content */}
       <div className="flex-1 overflow-hidden" style={{ background: 'var(--ios-bg)' }}>
         {activeTab === 'keypad' && (
           <KeypadView
             dialedNumber={dialedNumber}
             setDialedNumber={setDialedNumber}
-            deviceStatus="ready"
+            deviceStatus={deviceStatus}
             callStatus={callStatus}
-            onCall={(num) => { makeCall(num); setDialedNumber(''); }}
-            onRetryDevice={() => {}}
+            onCall={(num) => {
+              makeCall(num);
+              setDialedNumber('');
+            }}
+            onRetryDevice={() => window.location.reload()}
           />
         )}
         {activeTab === 'recents' && (
@@ -264,25 +545,30 @@ export default function App() {
 
       <BottomNav activeTab={activeTab} setActiveTab={setActiveTab} />
 
-      {/* Settings button to change callback number */}
       {callStatus === 'idle' && (
         <button
-          onClick={() => { setSetupInput(callbackNumber); setShowSetup(true); }}
+          onClick={() => {
+            setSetupInput(callbackNumber);
+            setShowSetup(true);
+          }}
           className="absolute top-4 right-4 z-30 text-xs px-2 py-1 rounded"
-          style={{ color: 'var(--ios-label3)', background: 'transparent' }}
+          style={{ color: deviceStatus === 'ready' ? 'var(--ios-label3)' : '#FF9500', background: 'transparent' }}
+          title={deviceError || 'Set backup phone number'}
         >
-          {callbackNumber ? `📞 ${callbackNumber}` : 'Set number'}
+          {callbackNumber ? `Backup: ${callbackNumber}` : 'Set backup'}
         </button>
       )}
 
-      {/* Contact modal */}
       {contactModal.open && (
         <ContactModal
           contact={contactModal.contact}
           onClose={() => setContactModal({ open: false, contact: null })}
           onSave={async (data) => {
             if (contactModal.contact) {
-              await supabase.from('ArctiCalls_contacts').update({ ...data, updated_at: new Date().toISOString() }).eq('id', contactModal.contact.id);
+              await supabase
+                .from('ArctiCalls_contacts')
+                .update({ ...data, updated_at: new Date().toISOString() })
+                .eq('id', contactModal.contact.id);
             } else {
               await supabase.from('ArctiCalls_contacts').insert(data);
             }

@@ -37,7 +37,7 @@ export default function KeypadView({
       } else if (e.key === 'Backspace') {
         setDialedNumber((prev) => prev.slice(0, -1));
       } else if (e.key === 'Enter') {
-        if (dialedNumber && deviceStatus === 'ready' && callStatus === 'idle') {
+        if (dialedNumber && callStatus === 'idle') {
           onCall(dialedNumber);
         }
       }
@@ -56,7 +56,7 @@ export default function KeypadView({
   };
 
   const handleCall = () => {
-    if (dialedNumber && deviceStatus === 'ready' && callStatus === 'idle') {
+    if (dialedNumber && callStatus === 'idle') {
       onCall(dialedNumber);
     }
   };
@@ -83,11 +83,11 @@ export default function KeypadView({
     '#8E8E93';
 
   const statusLabel =
-    deviceStatus === 'ready'  ? 'Ready' :
-    deviceStatus === 'error'  ? 'Connection error — tap to retry' :
-    'Connecting…';
+    deviceStatus === 'ready'  ? 'Internet call ready' :
+    deviceStatus === 'error'  ? 'Internet issue - backup available' :
+    'Connecting internet call...';
 
-  const canCall = dialedNumber && deviceStatus === 'ready' && callStatus === 'idle';
+  const canCall = dialedNumber && callStatus === 'idle';
 
   return (
     <div className="flex flex-col h-full" style={{ background: 'var(--ios-bg)' }}>
@@ -127,7 +127,7 @@ export default function KeypadView({
               if (digits) setDialedNumber((prev) => prev + digits);
             }}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && dialedNumber && deviceStatus === 'ready' && callStatus === 'idle') {
+              if (e.key === 'Enter' && dialedNumber && callStatus === 'idle') {
                 onCall(dialedNumber);
               }
             }}
