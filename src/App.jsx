@@ -197,6 +197,24 @@ export default function App() {
     return data.token;
   };
 
+  const requestMicrophoneAccess = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('This device does not support microphone calling in the app.');
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream.getTracks().forEach((track) => track.stop());
+    } catch (error) {
+      const denied = error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError';
+      throw new Error(
+        denied
+          ? 'Microphone access is blocked. Allow microphone access for ArctiCalls, then try again.'
+          : 'The microphone is not available. Check the phone permissions, then try again.'
+      );
+    }
+  };
+
   const loadContacts = async () => {
     const { data } = await supabase
       .from('ArctiCalls_contacts')
@@ -261,13 +279,12 @@ export default function App() {
     if (!normalized || callStatus !== 'idle') return;
 
     if (deviceStatus !== 'ready' || !deviceRef.current) {
-      if (callbackNumber) {
-        await makeCallbackCall(normalized);
-      } else {
-        setLastFailedNumber(normalized);
-        setShowSetup(true);
-        setCallError('Internet calling is not ready. Add her mobile number to use phone backup.');
-      }
+      setLastFailedNumber(normalized);
+      setCallError(
+        deviceError ||
+        'Internet calling is not ready. Allow microphone access, or use phone backup if the internet is poor.'
+      );
+      if (!callbackNumber) setShowSetup(true);
       return;
     }
 
@@ -283,6 +300,7 @@ export default function App() {
     });
 
     try {
+      await requestMicrophoneAccess();
       const call = await deviceRef.current.connect({
         params: { To: normalized },
       });
